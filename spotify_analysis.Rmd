@@ -1,0 +1,74 @@
+---
+title: "Spotify Analysis 05/03/21"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+INIT STUFF
+```{r, message=F , echo=F}
+rm(list=ls())
+library(tidyverse)
+library(data.table)
+library(jsonlite)
+library(DT)
+commons <- function(k, n = 20, dec=T)  k %>% table(useNA="a") %>% sort(d=dec) %>% head(n)
+p <- function(x) data.frame(lapply(x,substr,1,32))
+```
+
+ETL
+```{r}
+files = paste("MyData/endsong_",0:5,".json",sep="")
+df <- data.table(do.call(rbind, lapply(files, fromJSON)))
+setnames(df,c("master_metadata_track_name","master_metadata_album_artist_name","master_metadata_album_album_name"),c("Track","Artist","Album"),skip_absent=TRUE)
+df[,c("username"):=NULL]
+df[,`:=`(ts=as.POSIXct(ts,format = "%Y-%m-%dT%H:%M:%OS",tz="UTC"),playTime=round(ms_played/1000))]
+df <- df[!is.na(Track)] %>% select(ts,Track,Artist,Album,ms_played,spotify_track_uri,everything())
+rm(files)
+```
+
+Dates range from `r df$ts %>% as.IDate %>% min(na.rm=T)` to `r df$ts %>% as.IDate %>% max(na.rm=T)`. In this time I've listened to `r sum(df$ms_played)/1000/60/60/24` days of music, roughly `r (sum(df$ms_played)/1000/60/60/24)/(df$ts %>% as.IDate %>% max(na.rm=T) - df$ts %>% as.IDate %>% min(na.rm=T))*100 %>% round(2)`% of my total time during that period.
+
+EDA
+```{r}
+# most frequent songs
+df[,.(Album=first(Album),.N),by=.(Track,Artist)][order(N,decreasing=T)] %>% p
+# most listen time songs
+df[,.(Album=first(Album),'Hours'=round(sum(playTime)/3600,1),.N,URI=first(spotify_track_uri)),by=.(Track,Artist)][order(Hours,decreasing=T)] %>% p
+# most listen time albums
+df[,.(Hours=round(sum(playTime)/3600,1),URI=first(spotify_track_uri)),by=.(Album)][order(Hours,decreasing=T)] %>% p
+```
+SEARCH SPECIFICS
+```{r}
+trackQuery = "Nike"; df[grepl(trackQuery,Track),.(.N,Hours=round(sum(playTime)/3600,2),firstListen=as.IDate(min(ts)), lastListen=as.IDate(max(ts)),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)] %>% p
+df
+trackQueryUngrouped = "Nike"; df[grepl(trackQuery,Track),.(Track,playLength=round(playTime/max(playTime),2),ts,URI=first(spotify_track_uri))][order(ts,decreasing=F)] %>% p
+
+albumQuery = "Blonde"; df[grepl(albumQuery,Album),.(.N,Hours=round(sum(playTime)/3600,2),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)] %>% p
+
+artistQuery = "Kanye"; df[grepl(artistQuery,Artist),.(.N,Hours=round(sum(playTime)/3600,2),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)][order(Hours,decreasing=T)] %>% p
+
+
+```
+
+```{r}
+
+```
+
+Cluster songs, where distance = their temporal distance
+
+
+- Blonde
+- Worlds
+- Homey
+- Modal Soul
+- Kid A
+- good kid, m.A.A.d city
+- The Human Condition
+- Spiritual State
+- To Pimp A Butterfly
+- Metaphorical Music
+- Tapestry
+- U.F.O.F.
+
