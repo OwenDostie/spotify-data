@@ -13,47 +13,121 @@ library(tidyverse)
 library(data.table)
 library(jsonlite)
 library(DT)
+library(scales)
 commons <- function(k, n = 20, dec=T)  k %>% table(useNA="a") %>% sort(d=dec) %>% head(n)
-p <- function(x) data.frame(lapply(x,substr,1,32))
+commons <- function(k, n = 20, dec=T)  k %>% table(useNA="a") %>% sort(d=dec) %>% head(n)
+p <- function(x) print(x)#data.frame(lapply(x,substr,1,32))
 ```
 
 ETL
 ```{r}
 files = paste("MyData/endsong_",0:5,".json",sep="")
 df <- data.table(do.call(rbind, lapply(files, fromJSON)))
+# rename columns
 setnames(df,c("master_metadata_track_name","master_metadata_album_artist_name","master_metadata_album_album_name"),c("Track","Artist","Album"),skip_absent=TRUE)
 df[,c("username"):=NULL]
-df[,`:=`(ts=as.POSIXct(ts,format = "%Y-%m-%dT%H:%M:%OS",tz="UTC"),playTime=round(ms_played/1000))]
+# create columns
+df[,`:=`(ts=as.POSIXct(ts,format = "%Y-%m-%dT%H:%M:%OS",tz="UTC"),
+         minutesPlayed=ms_played/1000,hoursPlayed=ms_played/60000,
+         Date=as.IDate(ts),Time=as.ITime(ts))]
+# rearrange columns
 df <- df[!is.na(Track)] %>% select(ts,Track,Artist,Album,ms_played,spotify_track_uri,everything())
+# constants
+TSFIRST <- min(df$ts,na.rm=T); TSLAST <- max(df$ts,na.rm=T); LENTIME <- TSFIRST - TSLAST
+DATEFIRST <- min(df$Date,na.rm=T); DATELAST <- max(df$Date,na.rm=T); NDAYS <- DATELAST - DATEFIRST
+
+# functions
+hours <- function(t,s = "ms",round = 2,sum=F) {
+  round(t/3600000,round)
+}
+minutes <- function(t,s = "ms",round = 1,sum=F) {
+  round(t/60000,round)
+}
+seconds <- function(t,s = "ms",round = 1) {
+  round(t/1000,round)
+}
+# clean workspace
 rm(files)
 ```
 
-Dates range from `r df$ts %>% as.IDate %>% min(na.rm=T)` to `r df$ts %>% as.IDate %>% max(na.rm=T)`. In this time I've listened to `r sum(df$ms_played)/1000/60/60/24` days of music, roughly `r (sum(df$ms_played)/1000/60/60/24)/(df$ts %>% as.IDate %>% max(na.rm=T) - df$ts %>% as.IDate %>% min(na.rm=T))*100 %>% round(2)`% of my total time during that period.
+Dates range from `r DATEFIRST` to `r DATELAST`, `r NDAYS` days. In this time I've listened to `r round(sum(df$ms_played)/1000/60/60/24,2)` days of Spotify, roughly `r round((sum(df$ms_played)/1000/60/60/24)/*100,2)`% of my total time during that period.
 
 EDA
 ```{r}
+
 # most frequent songs
 df[,.(Album=first(Album),.N),by=.(Track,Artist)][order(N,decreasing=T)] %>% p
+
 # most listen time songs
-df[,.(Album=first(Album),'Hours'=round(sum(playTime)/3600,1),.N,URI=first(spotify_track_uri)),by=.(Track,Artist)][order(Hours,decreasing=T)] %>% p
+df[,.(Album=first(Album),'Hours'=round(sum(minutesPlayed)/3600,1),.N,URI=first(spotify_track_uri)),by=.(Track,Artist)][order(Hours,decreasing=T)] %>% p
+max(df$ts) %>% as.numeric
 # most listen time albums
-df[,.(Hours=round(sum(playTime)/3600,1),URI=first(spotify_track_uri)),by=.(Album)][order(Hours,decreasing=T)] %>% p
+msd <- max(sd(df$ts))
+df[,.(Hours=round(sum(minutesPlayed)/3600,1),SD=round(sd(ts)/msd,3),Artist=first(Artist),.N,URI=first(spotify_track_uri)),by=.(Album)][order(Hours,decreasing=T)] %>% p ; rm(msd)
+#%>% head(100) %>% pull(Artist) %>% commons %>% data.table
+
+# most listen time artists
+df[,.(Hours=round(sum(minutesPlayed)/3600,1),.N,URI=first(spotify_track_uri)),by=.(Artist)][order(Hours,decreasing=T)] %>% p
 ```
+
+
 SEARCH SPECIFICS
 ```{r}
-trackQuery = "Nike"; df[grepl(trackQuery,Track),.(.N,Hours=round(sum(playTime)/3600,2),firstListen=as.IDate(min(ts)), lastListen=as.IDate(max(ts)),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)] %>% p
-df
-trackQueryUngrouped = "Nike"; df[grepl(trackQuery,Track),.(Track,playLength=round(playTime/max(playTime),2),ts,URI=first(spotify_track_uri))][order(ts,decreasing=F)] %>% p
+df[grepl("the",Track),.(.N,Hours=round(sum(minutesPlayed)/3600,2),firstListen=as.IDate(min(ts)), lastListen=as.IDate(max(ts)),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)][order(Hours,decreasing=T)] %>% p
 
-albumQuery = "Blonde"; df[grepl(albumQuery,Album),.(.N,Hours=round(sum(playTime)/3600,2),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)] %>% p
+df[grepl("Nike",Track),.(Track,playLength=round(minutesPlayed/max(minutesPlayed),2),ts,URI=first(spotify_track_uri))][order(ts,decreasing=F)] %>% p
 
-artistQuery = "Kanye"; df[grepl(artistQuery,Artist),.(.N,Hours=round(sum(playTime)/3600,2),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)][order(Hours,decreasing=T)] %>% p
+df[grepl("Blonde",Album),.(.N,Hours=round(sum(minutesPlayed)/3600,2),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)] %>% p
 
-
+# artist search
+df[grepl("BROCKHAMPTON",Artist),.(.N,Hours=round(sum(minutesPlayed)/3600,2),URI=first(spotify_track_uri)),by=.(Track,Artist,Album)][order(Hours,decreasing=T)] %>% p
+# artist search, grouped by album
+df[grepl("BROCKHAMPTON",Artist),.(.N,Hours=round(sum(minutesPlayed)/3600,2),URI=first(spotify_track_uri)),by=.(Album,Artist)][order(Hours,decreasing=T)] %>% p
 ```
 
-```{r}
 
+DATE & TIME
+```{r}
+df %>% names
+ggplot() + geom_density(df,mapping = aes(x=ts))
+df[,.(.N,Hours=round(sum(minutesPlayed)/3600,2),Date = first(ts)),by=.(year(Date),month(Date))]
+ggplot(df[,.(.N,Hours=round(sum(minutesPlayed)/3600,2),Date = first(ts)),by=.(year(Date),month(Date))]) + 
+  geom_bar(mapping = aes(x=Date)) + scale_x_date(date_labels = "%b-%d-%Y")
+unique()
+
+length(unique(format(df$ts,"%m/%y")))
+
+# hours of music each month since 2016
+df %>% { 
+  ggplot(.) + 
+  geom_histogram(mapping = aes(x=Date,weight=hours(ms_played)),bins=length(unique(format(.$ts,"%m/%y")))) + 
+  scale_x_date(date_labels = "%b-%y", date_breaks = "3 month") + 
+  ylab("Hours of Music") + xlab("Month") +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+}
+
+# mean hours listened 
+df[order(ts),.(Hours=hours(sum(ms_played))),by=.(Month = format(ts,"%m/%y"))][,mean(Hours),by=.(Month = substr(Month,1,2))][order(as.numeric(Month))]
+
+# %>% ggplot(.) + geom_bar(aes(x=Month,weight=Hours)) + 
+  #scale_x_date(date_labels = "%b-%y", date_breaks = "3 month") + 
+  ylab("Hours of Music") + xlab("Month") +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+
+# What days did I listen to music? What percent of days?
+merge(data.table(Date=as.IDate(DATEFIRST:DATELAST)),df[,.(minutesPlayed = sum(ms_played),!.N==0),by=.(Date)],on=.("Date"))
+df[,.(Hours=sum(minutesPlayed)/3600),by=.(Date)] %>% nrow
+1686
+(1546/1686*100) %>% round(2) 
+```
+
+
+```{r}
+# # time of day
+# 
+# ggplot() + geom_density(df,mapping = aes(x=as.ITime(ts))) +
+#   scale_x_time(name = "Time of Day", time_labels = "%h:%m") +
+#   ylab("Density")
 ```
 
 Cluster songs, where distance = their temporal distance
@@ -70,5 +144,4 @@ Cluster songs, where distance = their temporal distance
 - To Pimp A Butterfly
 - Metaphorical Music
 - Tapestry
-- U.F.O.F.
 
